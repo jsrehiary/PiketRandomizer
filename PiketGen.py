@@ -1,48 +1,85 @@
 import pandas as pd
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+import random
 
-# 1) Load anggota
-df_members = pd.read_csv("members.csv")
-required_divisions = [
-    "internal SDM",
-    "internal logistik",
-    "eksternal",
-    "chameleon",
-    "Daruma",
-    "NBBDC",
-    "DnA",
-    "Honnoukai",
-    "TnT",
-]
+# =====================
+# KONFIGURASI
+# =====================
+START_DATE = datetime(2026, 1, 5)
+PERIOD_DAYS = 14
+TOTAL_PERIODS = 12
+RANDOM_SEED = 42
 
-start_date = date(2026, 1, 5)  # periode 1 mulai
-periods = 6                    # mau berapa periode (1 periode = 14 hari)
+random.seed(RANDOM_SEED)
 
-all_periods = []
-for p in range(1, periods + 1):
-    start = start_date + timedelta(days=(p - 1) * 14)
-    end = start + timedelta(days=13)
+# =====================
+# LOAD CSV
+# =====================
+df = pd.read_csv("members.csv")
 
-    # validasi divisi wajib
-    missing = sorted(set(required_divisions) - set(df_members["divisi"].unique()))
-    if missing:
-        raise ValueError(f"Divisi ini belum ada anggotanya di members.csv: {missing}")
+# semua anggota unik (buat kolom checklist)
+all_members = df["nama"].unique().tolist()
 
-    # filter hanya divisi yang dipakai, lalu ambil 1 random per divisi
-    df_pick = (
-        df_members[df_members["divisi"].isin(required_divisions)]
-        .groupby("divisi", group_keys=False)
-        .sample(n=1, random_state=100 + p)   # beda seed tiap periode [web:1414]
-        .sort_values("divisi")
-        .reset_index(drop=True)
-    )
+# mapping divisi -> anggota
+divisi_map = (
+    df.groupby("divisi")["nama"]
+      .apply(list)
+      .to_dict()
+)
 
-    df_pick.insert(0, "Periode", p)
-    df_pick.insert(1, "Mulai", start.isoformat())
-    df_pick.insert(2, "Sampai", end.isoformat())
-    all_periods.append(df_pick)
+# =====================
+# RANDOMIZE PER DIVISI
+# =====================
+for divisi in divisi_map:
+    random.shuffle(divisi_map[divisi])
 
-df_schedule = pd.concat(all_periods, ignore_index=True)
+# =====================
+# GENERATE JADWAL
+# =====================
+schedule = []
+checklist_rows = []
 
-# tampilkan tabel
-print(df_schedule.to_string(index=False))
+for period in range(TOTAL_PERIODS):
+    start = START_DATE + timedelta(days=period * PERIOD_DAYS)
+    end = start + timedelta(days=PERIOD_DAYS - 1)
+
+    for divisi, anggota in divisi_map.items():
+        petugas = anggota[period % len(anggota)]
+
+        # sheet jadwal
+        schedule.append({
+            "Periode": period + 1,
+            "Mulai": start.strftime("%Y-%m-%d"),
+            "Selesai": end.strftime("%Y-%m-%d"),
+            "Divisi": divisi,
+            "Petugas": petugas
+        })
+
+        # sheet checklist
+        row = {
+            "Periode": period + 1,
+            "Divisi": divisi
+        }
+
+        for member in all_members:
+            row[member] = "✔" if member == petugas else ""
+
+        checklist_rows.append(row)
+
+# =====================
+# DATAFRAME
+# =====================
+jadwal_df = pd.DataFrame(schedule)
+checklist_df = pd.DataFrame(checklist_rows)
+
+# =====================
+# EXPORT KE EXCEL
+# =====================
+with pd.ExcelWriter(
+    "jadwal_piket.xlsx",
+    engine="openpyxl"
+) as writer:
+    jadwal_df.to_excel(writer, sheet_name="Jadwal_Piket", index=False)
+    checklist_df.to_excel(writer, sheet_name="Checklist", index=False)
+
+print("Excel berhasil dibuat: jadwal_piket.xlsx")
